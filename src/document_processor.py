@@ -177,60 +177,59 @@ class DocumentProcessor:
                 "total_count": len(entities)
             }
         except Exception as e:
-            logger.warning(f"spaCy entity extlback")
-    ext)
+            logger.warning(f"spaCy entity extraction failed: {e}, using fallback")
+            return self._extract_entities_fallback(text)
     
-    def _extract_entities_fallback(self, text: str) -> Dict[str, Li:
-        """Fallback entit
+    def _extract_entities_fallback(self, text: str) -> Dict[str, List[Dict]]:
+        """Fallback entity extraction using regex patterns"""
         entities = []
         
         # Basic patterns for common entities
         patterns = {
             "ORG": [
-                r'\b[A-Z][a-zA-Z\s&',
-         )\b'
-         ],
-            "PERSO": [
-                r'\b[A-Z][a-z]+\s+[A-',
+                r'\b[A-Z][a-zA-Z\s&,.-]*(?:Inc\.?|LLC|Corp\.?|Corporation|Company|Ltd\.?)\b',
+                r'\b[A-Z][a-zA-Z\s&,.-]*(?:University|Institute|Foundation)\b'
+            ],
+            "PERSON": [
+                r'\b[A-Z][a-z]+\s+[A-Z][a-z]+\b',
                 r'\bMr\.?\s+[A-Z][a-z]+\b',
-                r'\bMs\.?\s+[A-Z]]+\b',
+                r'\bMs\.?\s+[A-Z][a-z]+\b',
                 r'\bDr\.?\s+[A-Z][a-z]+\b'
             ],
             "DATE": [
-                r'\b\d{1,2}[\/\-]\d{1,2}[\/\-]\d{',
-                
+                r'\b\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b',
+                r'\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{2,4}\b'
             ],
             "MONEY": [
-                r'\$[\d,]+(?:\.\d{2})?\
+                r'\$[\d,]+(?:\.\d{2})?\b',
                 r'\b\d+\s+dollars?\b'
             ]
+        }
         
-        
-    tems():
+        for label, pattern_list in patterns.items():
             for pattern in pattern_list:
-                matches = re.finditer(pattern, text, re.IGNOECASE)
+                matches = re.finditer(pattern, text, re.IGNORECASE)
                 for match in matches:
-                    entiti({
+                    entities.append({
                         "text": match.group(),
                         "label": label,
                         "start": match.start(),
                         "end": match.end(),
                         "description": label
-             })
-        
-        # Group entitiee
-         {}
+                    })
+        # Group entities by type
+        entity_groups = {}
         for entity in entities:
             label = entity["label"]
-            if label not in entit
+            if label not in entity_groups:
                 entity_groups[label] = []
-            entity_groups[lab)
+            entity_groups[label].append(entity)
         
         return {
             "entities": entities,
             "groups": entity_groups,
-        ntities)
-        }n(e": letal_coun    "tot(entityel].appendoups:y_grs =y_groupentits by typ       es.appendRns.i patterint attern_lisabel, p for l   }b',\b'{2,4}\d1,2},?\s+s+\d{mber)\DeceNovember|r|Octobet|September|gusly|Au|Ju|Junepril|Mayry|March|A|Februa(?:January\br'2,4}\b[a-zZ][a-z]+\bN   |Foundationnstitutety|I(?:Universi\s&,.-]*ZA--Z][a-zr'\b[A       \.?)\by|LtdCompanration||Corpo|Corp\.?\.?|LLC?:Inc,.-]*("""gex patterns using reonextractiy st[Dict]](tllbacks_faitie_extract_entn self.  retur      ing fal us: {e},ction failedra
+            "total_count": len(entities)
+        }
     
     def extract_dates_and_deadlines(self, text: str) -> List[Dict]:
         """Extract important dates and deadlines from legal text"""

@@ -10,17 +10,18 @@ import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
 try:
-    from src.document_processor import DocumentProcessor
-    from src.legal_bert_summarizer import LegalBertSummarizer
-    from src.legal_analyzer import LegalAnalyzer
+    from document_processor import DocumentProcessor
+    from legal_bert_summarizer import LegalBertSummarizer
+    from legal_analyzer import LegalAnalyzer
 except ImportError:
-    # Fallback imports for different deployment environments
+    # Try with src prefix for different deployment environments
     try:
-        from document_processor import DocumentProcessor
-        from legal_bert_summarizer import LegalBertSummarizer
-        from legal_analyzer import LegalAnalyzer
+        from src.document_processor import DocumentProcessor
+        from src.legal_bert_summarizer import LegalBertSummarizer
+        from src.legal_analyzer import LegalAnalyzer
     except ImportError as e:
         st.error(f"Error importing modules: {e}")
+        st.info("Please ensure all dependencies are installed correctly.")
         st.stop()
 
 # Initialize components with error handling
