@@ -1,19 +1,45 @@
 """
 Streamlit app for AI-Powered Legal Document Summarization
 """
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+
 import streamlit as st
 import os
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
-from src.document_processor import DocumentProcessor
-from src.legal_bert_summarizer import LegalBertSummarizer
-from src.legal_analyzer import LegalAnalyzer
+try:
+    from src.document_processor import DocumentProcessor
+    from src.legal_bert_summarizer import LegalBertSummarizer
+    from src.legal_analyzer import LegalAnalyzer
+except ImportError:
+    # Fallback imports for different deployment environments
+    try:
+        from document_processor import DocumentProcessor
+        from legal_bert_summarizer import LegalBertSummarizer
+        from legal_analyzer import LegalAnalyzer
+    except ImportError as e:
+        st.error(f"Error importing modules: {e}")
+        st.stop()
 
-# Initialize components
-processor = DocumentProcessor()
-legal_summarizer = LegalBertSummarizer()
-legal_analyzer = LegalAnalyzer()
+# Initialize components with error handling
+@st.cache_resource
+def initialize_components():
+    try:
+        processor = DocumentProcessor()
+        legal_summarizer = LegalBertSummarizer()
+        legal_analyzer = LegalAnalyzer()
+        return processor, legal_summarizer, legal_analyzer
+    except Exception as e:
+        st.error(f"Error initializing components: {e}")
+        return None, None, None
+
+processor, legal_summarizer, legal_analyzer = initialize_components()
+
+if not all([processor, legal_summarizer, legal_analyzer]):
+    st.error("Failed to initialize application components. Please check the logs.")
+    st.stop()
 
 # Streamlit UI Configurations
 st.set_page_config(page_title="AI Legal Document Summarizer", page_icon="⚖️", layout="wide")
@@ -59,20 +85,30 @@ if uploaded_file is not None:
             
             if st.button("Generate Summary"):
                 with st.spinner("Generating Legal BERT summary..."):
-                    if summarization_type == "Extractive":
-                        summary = legal_summarizer.extractive_summarize(
-                            document_info["clean_text"], 
-                            num_sentences=num_sentences
-                        )
-                        st.success("✅ Legal BERT Extractive Summary")
-                    else:
-                        summary = legal_summarizer.abstractive_summarize(
-                            document_info["clean_text"], 
-                            max_length=max_length
-                        )
-                        st.success("✅ Legal BERT-Enhanced Abstractive Summary")
-                    
-                    st.write(summary)
+                    try:
+                        if summarization_type == "Extractive":
+                            summary = legal_summarizer.extractive_summarize(
+                                document_info["clean_text"], 
+                                num_sentences=num_sentences
+                            )
+                            if summary:
+                                st.success("✅ Legal BERT Extractive Summary")
+                                st.write(summary)
+                            else:
+                                st.warning("Could not generate extractive summary. Please try with different settings.")
+                        else:
+                            summary = legal_summarizer.abstractive_summarize(
+                                document_info["clean_text"], 
+                                max_length=max_length
+                            )
+                            if summary:
+                                st.success("✅ Legal BERT-Enhanced Abstractive Summary")
+                                st.write(summary)
+                            else:
+                                st.warning("Could not generate abstractive summary. Please try with different settings.")
+                    except Exception as e:
+                        st.error(f"Error generating summary: {str(e)}")
+                        st.info("This might be due to model loading issues. Please try again or contact support.")
         
         with tab2:
             st.header("Legal Document Analysis")

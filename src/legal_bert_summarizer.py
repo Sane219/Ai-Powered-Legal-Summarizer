@@ -1,6 +1,9 @@
 """
 Legal BERT-based unified summarizer for both extractive and abstractive summarization
 """
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+
 from transformers import AutoTokenizer, AutoModel, pipeline
 import torch
 import numpy as np
@@ -19,15 +22,23 @@ class LegalBertSummarizer:
         self.model_name = model_name
         
         try:
-            # Load Legal BERT model and tokenizer
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-            self.model = AutoModel.from_pretrained(model_name)
+            # Load Legal BERT model and tokenizer with error handling
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+            self.model = AutoModel.from_pretrained(model_name, trust_remote_code=True)
             
-            # Legal clause classifier
-            self.classifier = pipeline("text-classification", model=model_name)
+            # Legal clause classifier with fallback
+            try:
+                self.classifier = pipeline("text-classification", model=model_name, trust_remote_code=True)
+            except Exception as e:
+                logger.warning(f"Could not load legal classifier: {e}, using fallback")
+                self.classifier = None
             
             # Fallback summarizer for abstractive tasks
-            self.abstractive_model = pipeline("summarization", model="facebook/bart-large-cnn")
+            try:
+                self.abstractive_model = pipeline("summarization", model="facebook/bart-large-cnn", trust_remote_code=True)
+            except Exception as e:
+                logger.warning(f"Could not load abstractive model: {e}")
+                self.abstractive_model = None
             
             logger.info(f"Initialized Legal BERT unified summarizer with {model_name}")
             
@@ -74,9 +85,13 @@ class LegalBertSummarizer:
             legal_scores = []
             for sentence in sentences:
                 try:
-                    classification = self.classifier(sentence)
-                    # Use the confidence score as legal importance
-                    score = classification[0]['score'] if classification else 0.5
+                    if self.classifier:
+                        classification = self.classifier(sentence)
+                        # Use the confidence score as legal importance
+                        score = classification[0]['score'] if classification else 0.5
+                    else:
+                        # Fallback scoring based on legal keywords
+                        score = self._get_legal_score_fallback(sentence)
                     legal_scores.append(score)
                 except:
                     legal_scores.append(0.5)
@@ -112,10 +127,15 @@ class LegalBertSummarizer:
             
             for sentence in sentences:
                 try:
-                    classification = self.classifier(sentence)
-                    # Keep sentences with high legal relevance
-                    if classification and classification[0]['score'] > 0.6:
-                        legal_sentences.append(sentence)
+                    if self.classifier:
+                        classification = self.classifier(sentence)
+                        # Keep sentences with high legal relevance
+                        if classification and classification[0]['score'] > 0.6:
+                            legal_sentences.append(sentence)
+                    else:
+                        # Fallback: use keyword-based legal relevance
+                        if self._get_legal_score_fallback(sentence) > 0.6:
+                            legal_sentences.append(sentence)
                 except:
                     continue
             
@@ -126,12 +146,16 @@ class LegalBertSummarizer:
                 prioritized_text = text
             
             # Use the abstractive model with legal context
-            summary = self.abstractive_model(
-                prioritized_text,
-                max_length=max_length,
-                min_length=min_length,
-                do_sample=False
-            )
+            if self.abstractive_model:
+                summary = self.abstractive_model(
+                    prioritized_text,
+                    max_length=max_length,
+                    min_length=min_length,
+                    do_sample=False
+                )
+            else:
+                # Fallback to extractive if abstractive model not available
+                return self.extractive_summarize(text, num_sentences=3)
             
             result = summary[0]["summary_text"]
             logger.info("Legal BERT-enhanced abstractive summarization successful")
@@ -182,6 +206,24 @@ class LegalBertSummarizer:
                 continue
         
         return insights
+    
+    def _get_legal_score_fallback(self, sentence: str) -> float:
+        """Fallback method to score legal importance using keywords"""
+        legal_keywords = [
+            'agreement', 'contract', 'party', 'parties', 'shall', 'hereby', 'whereas',
+            'confidentiality', 'termination', 'liability', 'indemnif
+operty',
+           ent'
+        ]
+        
+    
+        matches = sum(1 for keyword inwer)
+     
+        # Normalize sd 1
+        max_possible_mat)
+    se 0.5
+        
+        return min(score, 1.0) elhes > 0tc_possible_mamaxif tches ssible_mahes / max_poscore = matc    nce.split())), len(senteordseyw_k(len(legalches = minween 0 anore betc    sentence_loword ineys if krdl_keywoga lece.lower()r = sentenwece_loen    sent', 'amendmrce majeure', 'fotrationn', 'arbiisdictio, 'jurw'ning la 'goverl printellectuae', 'closur-disment', 'non, 'employpensation', 'comamages'   'd         ,ch'tion', 'breaica
 
 def main():
     """Test the Legal BERT unified summarizer"""
