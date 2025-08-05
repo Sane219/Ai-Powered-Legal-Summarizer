@@ -1,338 +1,704 @@
+"""
+Streamlit app for AI-Powered Legal Document Summarization - Clean Professional Version
+"""
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
 import streamlit as st
 import os
-import torch
-from transformers import BertTokenizer, BertModel, BartTokenizer, BartForConditionalGeneration
-import fitz  # PyMuPDF
-import re
-import spacy
-from streamlit.components.v1 import html
-import base64
-import io
-import pandas as pd
-import numpy as np
-from sklearn.metrics.pairwise import cosine_similarity
+import sys
 
-# Set page config
+# MUST be the first Streamlit command
 st.set_page_config(
-    page_title="Legal Document Summarizer",
+    page_title="AI Legal Document Summarizer",
     page_icon="⚖️",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
+    menu_items={
+        'Get Help': 'https://github.com/Sane219/Ai-Powered-Legal-Summarizer',
+        'Report a bug': "https://github.com/Sane219/Ai-Powered-Legal-Summarizer/issues",
+        'About': "AI-Powered Legal Document Summarizer v1.0"
+    }
 )
 
-# Custom CSS for professional UI
-def local_css(file_name):
-    if os.path.exists(file_name):
-        with open(file_name) as f:
-            st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
-    else:
-        st.warning("style.css not found. Using default styling.")
+sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
-local_css("style.css")
-
-# Initialize models with caching
-@st.cache_resource(show_spinner=False)
-def load_models():
+try:
+    from src.document_processor import DocumentProcessor
+    from src.legal_bert_summarizer import LegalBertSummarizer
+    from src.legal_analyzer import LegalAnalyzer
+except ImportError:
+    # Try with src prefix for different deployment environments
     try:
-        # Legal-BERT for sentence scoring
-        legal_tokenizer = BertTokenizer.from_pretrained("nlpaueb/legal-bert-base-uncased")
-        legal_model = BertModel.from_pretrained("nlpaueb/legal-bert-base-uncased")
-        # BART for abstractive summarization
-        summarizer_tokenizer = BartTokenizer.from_pretrained("facebook/bart-large-cnn")
-        summarizer_model = BartForConditionalGeneration.from_pretrained("facebook/bart-large-cnn")
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        legal_model.to(device)
-        summarizer_model.to(device)
-        return legal_tokenizer, legal_model, summarizer_tokenizer, summarizer_model
-    except Exception as e:
-        st.error(f"Failed to load models: {str(e)}")
-        return None, None, None, None
+        from src.document_processor import DocumentProcessor
+        from src.legal_bert_summarizer import LegalBertSummarizer
+        from src.legal_analyzer import LegalAnalyzer
+    except ImportError as e:
+        st.error(f"Error importing modules: {e}")
+        st.info("Please ensure all dependencies are installed correctly.")
+        st.stop()
 
-# Load models
-legal_tokenizer, legal_model, summarizer_tokenizer, summarizer_model = load_models()
-if any(model is None for model in [legal_tokenizer, legal_model, summarizer_tokenizer, summarizer_model]):
-    st.stop()
+# Clean, Professional CSS
+PROFESSIONAL_CSS = """
+/* Clean Professional Legal Theme */
 
-# Load spaCy model for legal text processing
-@st.cache_resource(show_spinner=False)
-def load_spacy():
-    try:
-        return spacy.load("en_core_web_sm")
-    except:
-        st.warning("Downloading spaCy model... This may take a moment.")
-        try:
-            spacy.cli.download("en_core_web_sm")
-            return spacy.load("en_core_web_sm")
-        except Exception as e:
-            st.error(f"Failed to load spaCy model: {str(e)}")
-            return None
+/* Main app styling */
+.stApp {
+    background-color: #f8f9fa;
+    color: #2c3e50;
+}
 
-nlp = load_spacy()
-if nlp is None:
-    st.stop()
+/* Remove default streamlit padding */
+.block-container {
+    padding-top: 2rem;
+    padding-bottom: 2rem;
+}
 
-# Function to extract text from PDF
-def extract_text_from_pdf(file):
-    try:
-        doc = fitz.open(stream=file.read(), filetype="pdf")
-        text = ""
-        for page in doc:
-            text += page.get_text()
-        return text
-    except Exception as e:
-        st.error(f"Error extracting PDF: {str(e)}")
-        return ""
+/* Professional header styling */
+.professional-header {
+    background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+    color: white;
+    padding: 3rem 2rem;
+    border-radius: 12px;
+    margin-bottom: 2rem;
+    text-align: center;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
 
-# Function to anonymize sensitive information
-def anonymize_text(text):
-    patterns = {
-        "PERSON": r"\b[A-Z][a-z]+ [A-Z][a-z]+\b",
-        "ORGANIZATION": r"\b(?:Inc|Corp|LLC|Ltd|GmbH|AG)\b",
-        "DATE": r"\b\d{1,2}[/-]\d{1,2}[/-]\d{4}\b",
-        "EMAIL": r"\b[\w\.-]+@[\w\.-]+\.\w+\b",
-        "PHONE": r"\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b"
+.professional-header h1 {
+    font-size: 2.5rem;
+    font-weight: 300;
+    margin-bottom: 0.5rem;
+    letter-spacing: -0.5px;
+}
+
+.professional-header p {
+    font-size: 1.1rem;
+    opacity: 0.9;
+    margin-bottom: 1.5rem;
+}
+
+/* Feature badges */
+.feature-badge {
+    background: rgba(255, 255, 255, 0.15);
+    color: white;
+    padding: 0.5rem 1rem;
+    border-radius: 20px;
+    margin: 0.25rem;
+    display: inline-block;
+    font-size: 0.9rem;
+    backdrop-filter: blur(10px);
+}
+
+/* Clean card styling */
+.clean-card {
+    background: white;
+    border-radius: 8px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    border: 1px solid #e9ecef;
+    transition: all 0.2s ease;
+}
+
+.clean-card:hover {
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+    transform: translateY(-1px);
+}
+
+/* Card with accent border */
+.accent-card {
+    background: white;
+    border-radius: 8px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    border-left: 4px solid #3498db;
+}
+
+/* Professional button styling */
+.stButton > button {
+    background: #3498db;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 0.75rem 1.5rem;
+    font-weight: 500;
+    font-size: 0.95rem;
+    transition: all 0.2s ease;
+    box-shadow: 0 2px 4px rgba(52, 152, 219, 0.2);
+}
+
+.stButton > button:hover {
+    background: #2980b9;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 8px rgba(52, 152, 219, 0.3);
+}
+
+/* Clean upload area */
+.upload-area {
+    border: 2px dashed #bdc3c7;
+    border-radius: 8px;
+    padding: 2rem;
+    text-align: center;
+    background: #f8f9fa;
+    margin-bottom: 1rem;
+    transition: all 0.2s ease;
+}
+
+.upload-area:hover {
+    border-color: #3498db;
+    background: #ecf0f1;
+}
+
+/* Tab styling */
+.stTabs > div > div > div > div {
+    background: #f8f9fa;
+    color: #2c3e50;
+    border-radius: 8px 8px 0 0;
+    border: 1px solid #e9ecef;
+    border-bottom: none;
+    font-weight: 500;
+    transition: all 0.2s ease;
+}
+
+.stTabs > div > div > div > div:hover {
+    background: #e9ecef;
+}
+
+.stTabs > div > div > div > div[data-selected="true"] {
+    background: white;
+    color: #3498db;
+    border-bottom: 2px solid #3498db;
+}
+
+/* Clean text area */
+.stTextArea > div > div > textarea {
+    border: 1px solid #e9ecef;
+    border-radius: 6px;
+    background: #f8f9fa;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    transition: all 0.2s ease;
+}
+
+.stTextArea > div > div > textarea:focus {
+    border-color: #3498db;
+    background: white;
+    box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
+}
+
+/* Clean selectbox */
+.stSelectbox > div > div > select {
+    border: 1px solid #e9ecef;
+    border-radius: 6px;
+    background: white;
+    padding: 0.5rem;
+    transition: all 0.2s ease;
+}
+
+.stSelectbox > div > div > select:focus {
+    border-color: #3498db;
+    box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
+}
+
+/* Clean slider */
+.stSlider > div > div > div > div {
+    background: #e9ecef;
+    border-radius: 4px;
+}
+
+.stSlider > div > div > div > div > div {
+    background: #3498db;
+    border: 2px solid white;
+    border-radius: 50%;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+/* Sidebar styling */
+.css-1d391kg {
+    background: white;
+    border-radius: 8px;
+    padding: 1.5rem;
+    margin: 1rem;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
+
+/* Professional metrics */
+.metric-card {
+    background: white;
+    border-radius: 8px;
+    padding: 1.5rem;
+    text-align: center;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    border: 1px solid #e9ecef;
+    transition: all 0.2s ease;
+}
+
+.metric-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+.metric-value {
+    font-size: 2rem;
+    font-weight: 600;
+    color: #2c3e50;
+    margin: 0.5rem 0;
+}
+
+.metric-label {
+    color: #7f8c8d;
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+
+/* Risk visualization */
+.risk-card {
+    background: white;
+    border-radius: 8px;
+    padding: 1rem;
+    text-align: center;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    border: 1px solid #e9ecef;
+}
+
+.risk-high {
+    border-left: 4px solid #e74c3c;
+}
+
+.risk-medium {
+    border-left: 4px solid #f39c12;
+}
+
+.risk-low {
+    border-left: 4px solid #27ae60;
+}
+
+.risk-bar {
+    height: 8px;
+    background: #ecf0f1;
+    border-radius: 4px;
+    margin: 0.5rem 0;
+    overflow: hidden;
+}
+
+.risk-fill-high {
+    height: 100%;
+    background: #e74c3c;
+    border-radius: 4px;
+}
+
+.risk-fill-medium {
+    height: 100%;
+    background: #f39c12;
+    border-radius: 4px;
+}
+
+.risk-fill-low {
+    height: 100%;
+    background: #27ae60;
+    border-radius: 4px;
+}
+
+/* Success messages */
+.success-message {
+    background: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+    border-radius: 6px;
+    padding: 1rem;
+    margin: 1rem 0;
+}
+
+.error-message {
+    background: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+    border-radius: 6px;
+    padding: 1rem;
+    margin: 1rem 0;
+}
+
+.warning-message {
+    background: #fff3cd;
+    color: #856404;
+    border: 1px solid #ffeaa7;
+    border-radius: 6px;
+    padding: 1rem;
+    margin: 1rem 0;
+}
+
+/* Clean typography */
+h1, h2, h3, h4, h5, h6 {
+    color: #2c3e50;
+    font-weight: 600;
+    line-height: 1.2;
+}
+
+h1 { font-size: 2.5rem; }
+h2 { font-size: 2rem; }
+h3 { font-size: 1.5rem; }
+h4 { font-size: 1.25rem; }
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .professional-header {
+        padding: 2rem 1rem;
     }
     
-    for entity_type, pattern in patterns.items():
-        text = re.sub(pattern, f"[{entity_type}]", text)
+    .professional-header h1 {
+        font-size: 2rem;
+    }
     
-    return text
+    .clean-card {
+        padding: 1rem;
+        margin-bottom: 1rem;
+    }
+    
+    .upload-area {
+        padding: 1.5rem;
+    }
+}
 
-# Function to extract legal citations
-def extract_citations(text):
-    citation_patterns = [
-        r'\b\d+\s+U\.S\.\s+\d+\b',
-        r'\b\d+\s+F\.\s*\d+\b',
-        r'\b\d+\s+F\.\s*(?:Supp\.)?\s*\d+\b',
-        r'\b\d+\s+S\.?\.?C\.?t\.?\s+\d+\b',
-        r'\b\d+\s+So\.\s*\d+\b',
-        r'\b\d+\s+N\.?E\.?2?d?\s+\d+\b',
-        r'\b\d+\s+N\.?W\.?2?d?\s+\d+\b',
-        r'\b\d+\s+A\.?\.?2?d?\s+\d+\b',
-        r'\b\d+\s+P\.?\.?2?d?\s+\d+\b',
-        r'\b\d+\s+S\.?E\.?2?d?\s+\d+\b',
-        r'\b\d+\s+S\.?W\.?2?d?\s+\d+\b',
-        r'\b\d+\s+Cal\.\s+\d+\b',
-        r'\b\d+\s+N\.?Y\.?S\.?\.?2?d?\s+\d+\b'
-    ]
-    
-    citations = []
-    for pattern in citation_patterns:
-        matches = re.finditer(pattern, text)
-        for match in matches:
-            citations.append({
-                "text": match.group(),
-                "start": match.start(),
-                "end": match.end()
-            })
-    
-    return citations
+/* Remove default streamlit spacing */
+div[data-testid="stVerticalBlock"] > div[style*="flex-direction: column"] > div[data-testid="stVerticalBlock"] {
+    gap: 0.5rem;
+}
 
-# Function to score sentences using Legal-BERT
-def score_sentences(text):
-    doc = nlp(text)
-    sentences = [sent.text.strip() for sent in doc.sents if len(sent.text.strip()) > 10]
-    if not sentences:
-        return [], []
-    
-    # Tokenize sentences
-    inputs = legal_tokenizer(sentences, return_tensors="pt", padding=True, truncation=True, max_length=512)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    inputs = {k: v.to(device) for k, v in inputs.items()}
-    
-    # Get sentence embeddings
-    with torch.no_grad():
-        outputs = legal_model(**inputs)
-        sentence_embeddings = outputs.last_hidden_state[:, 0, :]  # CLS token embeddings
-    
-    # Calculate importance scores (e.g., cosine similarity to mean embedding)
-    mean_embedding = sentence_embeddings.mean(dim=0).reshape(1, -1)
-    scores = cosine_similarity(sentence_embeddings.cpu().numpy(), mean_embedding.cpu().numpy()).flatten()
-    
-    return sentences, scores
+/* Clean spinner */
+.stSpinner > div {
+    border-color: #3498db;
+    border-top-color: transparent;
+}
 
-# Function to summarize text with legal context
-def summarize_legal_text(text, max_length=512, min_length=128, top_k=3):
-    # Clean and truncate text
-    text = text.replace("\n", " ")[:10000]
-    
-    # Extractive summarization with Legal-BERT
-    sentences, scores = score_sentences(text)
-    if not sentences:
-        return "No valid sentences found for summarization."
-    
-    # Select top-k sentences
-    top_sentences = [sentences[i] for i in np.argsort(scores)[-top_k:]]
-    extractive_summary = " ".join(top_sentences)
-    
-    # Abstractive summarization with BART
-    inputs = summarizer_tokenizer(
-        extractive_summary,
-        return_tensors="pt",
-        max_length=1024,
-        truncation=True,
-        padding="max_length"
-    )
-    
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    inputs = {k: v.to(device) for k, v in inputs.items()}
-    
-    with torch.no_grad():
-        summary_ids = summarizer_model.generate(
-            inputs["input_ids"],
-            attention_mask=inputs["attention_mask"],
-            max_length=max_length,
-            min_length=min_length,
-            length_penalty=1.0,
-            num_beams=2,
-            early_stopping=True
-        )
-    
-    summary = summarizer_tokenizer.decode(summary_ids[0], skip_special_tokens=True)
-    summary = re.sub(r'\s+', ' ', summary).strip()
-    
-    return summary
+/* Professional table styling */
+.stDataFrame {
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+}
 
-# Function to highlight source text
-def highlight_source_text(text, summary):
-    doc = nlp(text)
-    summary_sentences = [sent.text.strip() for sent in nlp(summary).sents]
-    
-    highlighted_text = []
-    for sent in doc.sents:
-        sent_text = sent.text.strip()
-        is_highlighted = any(
-            sent_text.lower() in s.lower() or s.lower() in sent_text.lower()
-            for s in summary_sentences
-        )
-        
-        if is_highlighted:
-            highlighted_text.append(f'<mark class="highlight">{sent_text}</mark>')
-        else:
-            highlighted_text.append(sent_text)
-    
-    return " ".join(highlighted_text)
+.stDataFrame > div > div > table {
+    border-collapse: collapse;
+    width: 100%;
+}
 
-# Function to generate download link
-def get_download_link(text, filename, file_type="txt"):
+.stDataFrame > div > div > table th {
+    background: #f8f9fa;
+    color: #2c3e50;
+    padding: 0.75rem;
+    text-align: left;
+    font-weight: 600;
+    border-bottom: 2px solid #e9ecef;
+}
+
+.stDataFrame > div > div > table td {
+    padding: 0.75rem;
+    border-bottom: 1px solid #f1f3f4;
+}
+
+.stDataFrame > div > div > table tr:hover {
+    background: #f8f9fa;
+}
+"""
+
+# Load professional CSS
+def load_css():
+    st.markdown(f'<style>{PROFESSIONAL_CSS}</style>', unsafe_allow_html=True)
+
+# Initialize components with error handling
+@st.cache_resource
+def initialize_components():
     try:
-        if file_type == "txt":
-            b64 = base64.b64encode(text.encode()).decode()
-            href = f'<a href="data:file/txt;base64,{b64}" download="{filename}">Download {file_type.upper()}</a>'
-        elif file_type == "pdf":
-            pdf_bytes = io.BytesIO()
-            doc = fitz.open()
-            page = doc.new_page()
-            page.insert_text((72, 72), text)
-            doc.save(pdf_bytes)
-            pdf_bytes.seek(0)
-            b64 = base64.b64encode(pdf_bytes.read()).decode()
-            href = f'<a href="data:application/pdf;base64,{b64}" download="{filename}">Download PDF</a>'
-        return href
+        processor = DocumentProcessor()
+        legal_summarizer = LegalBertSummarizer()
+        legal_analyzer = LegalAnalyzer()
+        return processor, legal_summarizer, legal_analyzer
     except Exception as e:
-        st.error(f"Error generating download link: {str(e)}")
-        return ""
+        st.error(f"Error initializing components: {e}")
+        return None, None, None
 
-# Main app
-def main():
-    with st.sidebar:
-        st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/e/e4/Seal_of_the_United_States_Department_of_Justice.svg/1200px-Seal_of_the_United_States_Department_of_Justice.svg.png", width=100)
-        st.title("Legal Document Summarizer")
-        st.markdown("---")
-        
-        st.subheader("Settings")
-        max_length = st.slider("Summary Length", 256, 1024, 512, 128)
-        min_length = st.slider("Minimum Length", 64, 256, 128, 64)
-        top_k = st.slider("Top Sentences for Extraction", 1, 5, 3, 1)
-        anonymize = st.checkbox("Anonymize Sensitive Info", value=True)
-        preserve_citations = st.checkbox("Preserve Citations", value=True)
-        show_explanation = st.checkbox("Show Explanation", value=True)
-        
-        st.markdown("---")
-        st.markdown("### Features")
-        st.markdown("- Legal-specific summarization")
-        st.markdown("- Citation preservation")
-        st.markdown("- Document anonymization")
-        st.markdown("- Source text highlighting")
-        st.markdown("- Bias detection framework")
-        st.markdown("- Privacy-focused processing")
-        
-        st.markdown("---")
-        st.markdown("### Model Information")
-        st.markdown("**Summarization Model:** facebook/bart-large-cnn")
-        st.markdown("**Legal Model:** nlpaueb/legal-bert-base-uncased")
-        st.markdown("**Legal NER Model:** Regex-based")
-    
-    st.title("Legal Document Summarization Tool")
-    st.markdown("Upload a legal document to generate a concise, accurate summary with preserved citations and legal context.")
+# Clean UI Components
+def create_professional_header():
+    """Create a clean, professional header"""
+    st.markdown("""
+    <div class="professional-header">
+        <h1>⚖️ AI Legal Document Summarizer</h1>
+        <p>Transform complex legal documents into clear, actionable insights</p>
+        <div>
+            <span class="feature-badge">📄 PDF, DOCX, TXT Support</span>
+            <span class="feature-badge">🤖 Legal BERT Powered</span>
+            <span class="feature-badge">⚡ Real-time Analysis</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+def create_clean_upload():
+    """Create a clean file upload section"""
+    st.markdown("""
+    <div class="upload-area">
+        <h3 style="color: #2c3e50; margin-bottom: 1rem;">📁 Upload Your Legal Document</h3>
+        <p style="color: #7f8c8d; margin-bottom: 1rem;">
+            Supported formats: PDF, DOCX, TXT | Max file size: 10MB
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
     
     uploaded_file = st.file_uploader(
-        "Upload Legal Document (PDF, TXT)",
-        type=["pdf", "txt"],
-        help="Supported formats: PDF, TXT. Max size: 10MB"
+        "Choose a file", 
+        type=["pdf", "docx", "txt"],
+        label_visibility="collapsed",
+        key="file_uploader"
     )
     
-    if uploaded_file is not None:
-        try:
-            if uploaded_file.name.endswith(".pdf"):
-                with st.spinner("Extracting text from PDF..."):
-                    text = extract_text_from_pdf(uploaded_file)
-            else:
-                text = uploaded_file.read().decode("utf-8")
-            
-            if len(text) > 100000:
-                st.error("Document is too large. Please upload a file with less than 100,000 characters.")
-                return
-            
-            if anonymize:
-                with st.spinner("Anonymizing sensitive information..."):
-                    text = anonymize_text(text)
-            
-            citations = extract_citations(text)
-            
-            with st.spinner("Generating legal summary..."):
-                progress_bar = st.progress(0)
-                summary = summarize_legal_text(text, max_length, min_length, top_k)
-                progress_bar.progress(100)
-                
-            st.markdown("---")
-            st.header("Summary")
-            st.markdown(f'<div class="summary-box">{summary}</div>', unsafe_allow_html=True)
-            
-            if citations:
-                st.subheader("Detected Citations")
-                citation_df = pd.DataFrame(citations)
-                st.dataframe(citation_df.drop(columns=["start", "end"]))
-            
-            if show_explanation:
-                st.subheader("Source Text Explanation")
-                with st.expander("View highlighted source text"):
-                    highlighted_text = highlight_source_text(text, summary)
-                    st.markdown(highlighted_text, unsafe_allow_html=True)
-            
-            st.markdown("---")
-            st.subheader("Export Options")
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.markdown(get_download_link(summary, "legal_summary.txt", "txt"), unsafe_allow_html=True)
-            
-            with col2:
-                st.markdown(get_download_link(summary, "legal_summary.pdf", "pdf"), unsafe_allow_html=True)
-            
-            st.markdown("---")
-            st.subheader("Bias Detection")
-            st.info("Bias detection framework implemented. In production, this would analyze for demographic, jurisdictional, and interpretational biases.")
-            
-            with st.expander("Processing Details"):
-                st.write(f"Original document length: {len(text)} characters")
-                st.write(f"Summary length: {len(summary)} characters")
-                st.write(f"Compression ratio: {round(len(summary)/len(text)*100, 1)}%")
-                st.write(f"Citations detected: {len(citations)}")
-                st.write("Anonymization: " + ("Enabled" if anonymize else "Disabled"))
-                st.write("Citation preservation: " + ("Enabled" if preserve_citations else "Disabled"))
-        except Exception as e:
-            st.error(f"An error occurred during processing: {str(e)}")
+    if uploaded_file:
+        # File info display
+        file_size = len(uploaded_file.getvalue()) / 1024 / 1024  # MB
+        st.markdown(f"""
+        <div class="clean-card">
+            <h4 style="color: #2c3e50; margin-bottom: 1rem;">📄 File Information</h4>
+            <p><strong>Name:</strong> {uploaded_file.name}</p>
+            <p><strong>Size:</strong> {file_size:.2f} MB</p>
+            <p><strong>Type:</strong> {uploaded_file.type}</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    return uploaded_file
 
-if __name__ == "__main__":
-    main()
+def create_clean_tabs():
+    """Create clean, professional tabs"""
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📝 Summarization", 
+        "⚖️ Legal Analysis", 
+        "🔍 Insights", 
+        "📊 Statistics"
+    ])
+    return tab1, tab2, tab3, tab4
+
+def create_clean_card(title, content, icon="📄", accent_color="#3498db"):
+    """Create a clean, professional card"""
+    st.markdown(f"""
+    <div class="accent-card" style="border-left-color: {accent_color};">
+        <h3 style="color: {accent_color}; margin-bottom: 1rem;">{icon} {title}</h3>
+        <div style="background: #f8f9fa; padding: 1rem; border-radius: 6px;">
+            {content}
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+def create_clean_metrics(stats):
+    """Create clean metric cards"""
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div style="font-size: 2.5rem; color: #3498db; margin-bottom: 0.5rem;">📝</div>
+            <div class="metric-value">{stats['word_count']}</div>
+            <div class="metric-label">Words</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div style="font-size: 2.5rem; color: #e74c3c; margin-bottom: 0.5rem;">👥</div>
+            <div class="metric-value">{len(stats['parties'])}</div>
+            <div class="metric-label">Parties</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div style="font-size: 2.5rem; color: #f39c12; margin-bottom: 0.5rem;">📊</div>
+            <div class="metric-value">{stats['entities'].get('total_count', 0)}</div>
+            <div class="metric-label">Entities</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+def create_clean_risk_visualization(risk_data):
+    """Create clean risk assessment visualization"""
+    st.markdown("""
+    <div class="clean-card">
+        <h3 style="color: #e74c3c; margin-bottom: 1.5rem;">⚠️ Risk Assessment</h3>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown(f"""
+        <div class="risk-card risk-high">
+            <div style="color: #e74c3c; font-weight: 600; margin-bottom: 0.5rem;">🔴 High Risk</div>
+            <div class="risk-bar">
+                <div class="risk-fill-high" style="width: {min(risk_data['high'] * 10, 100)}%;"></div>
+            </div>
+            <div style="font-size: 1.5rem; font-weight: 600; color: #2c3e50;">{risk_data['high']}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown(f"""
+        <div class="risk-card risk-medium">
+            <div style="color: #f39c12; font-weight: 600; margin-bottom: 0.5rem;">🟡 Medium Risk</div>
+            <div class="risk-bar">
+                <div class="risk-fill-medium" style="width: {min(risk_data['medium'] * 10, 100)}%;"></div>
+            </div>
+            <div style="font-size: 1.5rem; font-weight: 600; color: #2c3e50;">{risk_data['medium']}</div>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        st.markdown(f"""
+        <div class="risk-card risk-low">
+            <div style="color: #27ae60; font-weight: 600; margin-bottom: 0.5rem;">🟢 Low Risk</div>
+            <div class="risk-bar">
+                <div class="risk-fill-low" style="width: {min(risk_data['low'] * 10, 100)}%;"></div>
+            </div>
+            <div style="font-size: 1.5rem; font-weight: 600; color: #2c3e50;">{risk_data['low']}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+def create_professional_sidebar():
+    """Create a professional sidebar"""
+    st.sidebar.markdown("""
+    <div style="text-align: center; padding: 1.5rem; background: linear-gradient(135deg, #2c3e50, #34495e); 
+                border-radius: 8px; color: white; margin-bottom: 1.5rem;">
+        <h2 style="margin: 0; font-size: 1.5rem;">⚖️ Legal AI</h2>
+        <p style="margin: 0.5rem 0 0 0; opacity: 0.9; font-size: 0.9rem;">Powered by Legal BERT</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.sidebar.markdown("### 🚀 Features")
+    st.sidebar.markdown("""
+    - **Smart Summarization**: Extractive & Abstractive
+    - **Legal Analysis**: Risk assessment & jurisdiction
+    - **Deep Insights**: Clause importance analysis
+    - **Rich Statistics**: Document metrics & entities
+    """)
+    
+    st.sidebar.markdown("### 📋 Supported Formats")
+    st.sidebar.markdown("""
+    - PDF documents
+    - DOCX files  
+    - TXT files
+    """)
+    
+    st.sidebar.markdown("### 💡 Tips")
+    st.sidebar.markdown("""
+    - Use clear, well-formatted documents
+    - Larger files may take longer to process
+    - Check results for accuracy
+    """)
+    
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 📞 Support")
+    st.sidebar.markdown("""
+    [GitHub Issues](https://github.com/Sane219/Ai-Powered-Legal-Summarizer/issues)
+    
+    **Version**: 1.0.0
+    """)
+
+def show_clean_success(message, details=""):
+    """Show clean success message"""
+    st.markdown(f"""
+    <div class="success-message">
+        <h4 style="margin: 0 0 0.5rem 0;">✅ {message}</h4>
+        {f'<p style="margin: 0;">{details}</p>' if details else ''}
+    </div>
+    """, unsafe_allow_html=True)
+
+def show_clean_error(message, details=""):
+    """Show clean error message"""
+    st.markdown(f"""
+    <div class="error-message">
+        <h4 style="margin: 0 0 0.5rem 0;">❌ {message}</h4>
+        {f'<p style="margin: 0;">{details}</p>' if details else ''}
+    </div>
+    """, unsafe_allow_html=True)
+
+def show_clean_warning(message, details=""):
+    """Show clean warning message"""
+    st.markdown(f"""
+    <div class="warning-message">
+        <h4 style="margin: 0 0 0.5rem 0;">⚠️ {message}</h4>
+        {f'<p style="margin: 0;">{details}</p>' if details else ''}
+    </div>
+    """, unsafe_allow_html=True)
+
+# Main application
+def main():
+    # Load professional CSS
+    load_css()
+    
+    # Create professional sidebar
+    create_professional_sidebar()
+    
+    # Create header
+    create_professional_header()
+    
+    # Initialize components
+    processor, legal_summarizer, legal_analyzer = initialize_components()
+    if not all([processor, legal_summarizer, legal_analyzer]):
+        show_clean_error("Failed to initialize application components", "Please check the logs and ensure all dependencies are installed.")
+        st.stop()
+    
+    # Clean file upload
+    uploaded_file = create_clean_upload()
+    
+    if uploaded_file is not None:
+        # Process file
+        file_path = os.path.join("data", uploaded_file.name)
+        with open(file_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        
+        # Extract and display text
+        st.markdown("""
+        <div class="clean-card">
+            <h3 style="color: #3498db; margin-bottom: 1rem;">📄 Document Text</h3>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        document_info = processor.process_document(file_path)
+        
+        if "error" in document_info:
+            show_clean_error("Document Processing Error", document_info['error'])
+        else:
+            # Clean text display
+            st.text_area("Extracted Text", document_info["clean_text"], height=200)
+            
+            # Create clean tabs
+            tab1, tab2, tab3, tab4 = create_clean_tabs()
+            
+            with tab1:
+                st.markdown("""
+                <div class="clean-card">
+                    <h3 style="color: #3498db; margin-bottom: 1rem;">📝 Legal BERT Summarization</h3>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Clean summarization options
+                col1, col2 = st.columns(2)
+                with col1:
+                    summarization_type = st.selectbox("Summarization Type", ["Extractive", "Abstractive"])
+                with col2:
+                    if summarization_type == "Extractive":
+                        num_sentences = st.slider("Number of sentences", 1, 10, 3)
+                    else:
+                        max_length = st.slider("Max length", 50, 300, 150)
+                
+                if st.button("Generate Summary", key="summarize_btn"):
+                    with st.spinner("Generating summary..."):
+                        try:
+                            if summarization_type == "Extractive":
+                                summary = legal_summarizer.extractive_summarize(
+                                    document_info["clean_text"],
+                                    num_sentences=num_sentences
+                                )
+                                if summary:
+                                    show_clean_success("Extractive Summary Generated")
+                                    create_clean_card("Extractive Summary", summary, "📝", "#27ae60")
+                                else:
+                                    show_clean_warning("Summary Generation Failed", "Could not generate extractive summary. Please try with different settings.")
+                            else:
+                                summary = legal_summarizer.abstractive_summa
