@@ -40,10 +40,6 @@ Thumbs.db
 # Logs
 *.log
 
-# Data files
-data/*.pdf
-data/*.docx
-data/*.txt
 
 # Model files
 *.pt

@@ -10,23 +10,35 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class ExtractiveSummarizer:
-    """Summarizes legal documents using extractive summarization"""
+    """Summarizes legal documents using extractive summarization with Legal BERT"""
     
     def __init__(self, model_name="mauro/bert-base-uncased-finetuned-clause-type"):
         """Initialize the summarizer with a legal-specific BERT model"""
         self.model_name = model_name
         try:
-            # For clause classification, use text-classification pipeline
+            # Import additional libraries for Legal BERT-based summarization
+            from transformers import AutoTokenizer, AutoModel
+            import torch
+            
+            # Load Legal BERT model and tokenizer
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+            self.legal_model = AutoModel.from_pretrained(model_name)
+            
+            # For clause classification
             self.classifier = pipeline("text-classification", model=model_name)
-            # For summarization, use a separate model
+            
+            # For summarization fallback, use legal-oriented model
             self.summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
-            logger.info(f"Initialized extractive summarizer with classification model {model_name}")
+            
+            logger.info(f"Initialized Legal BERT extractive summarizer with model {model_name}")
         except Exception as e:
-            logger.error(f"Failed to initialize model {model_name}: {e}")
+            logger.error(f"Failed to initialize Legal BERT model {model_name}: {e}")
             # Fallback to a lighter model
             self.model_name = "sshleifer/distilbart-cnn-12-6"
             self.summarizer = pipeline("summarization", model=self.model_name)
             self.classifier = None
+            self.legal_model = None
+            self.tokenizer = None
             logger.info(f"Fallback to model {self.model_name}")
 
     def summarize(self, text, max_length=130, min_length=30) -> str:
