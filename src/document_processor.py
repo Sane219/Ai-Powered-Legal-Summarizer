@@ -25,8 +25,16 @@ class DocumentProcessor:
         try:
             self.nlp = spacy.load("en_core_web_sm")
         except OSError:
-            logger.warning("spaCy model 'en_core_web_sm' not found. Please install it using: python -m spacy download en_core_web_sm")
-            self.nlp = None
+            try:
+                # Try to download the model automatically
+                import subprocess
+                import sys
+                subprocess.check_call([sys.executable, "-m", "spacy", "download", "en_core_web_sm"])
+                self.nlp = spacy.load("en_core_web_sm")
+                logger.info("Successfully downloaded and loaded spaCy model")
+            except Exception as e:
+                logger.warning(f"Could not load or download spaCy model: {e}")
+                self.nlp = None
     
     def extract_text_from_pdf(self, file_path: str) -> str:
         """Extract text from PDF file using PyMuPDF"""
@@ -137,35 +145,92 @@ class DocumentProcessor:
         return sections
     
     def extract_entities(self, text: str) -> Dict[str, List[Dict]]:
-        """Extract named entities from legal text using spaCy"""
+        """Extract named entities from legal text using spaCy or fallback method"""
         if not self.nlp:
-            return {"entities": [], "error": "spaCy model not available"}
+            # Fallback entity extraction using regex patterns
+            return self._extract_entities_fallback(text)
         
-        doc = self.nlp(text)
+        try:
+            doc = self.nlp(text)
+            entities = []
+            
+            for ent in doc.ents:
+                entities.append({
+                    "text": ent.text,
+                    "label": ent.label_,
+                    "start": ent.start_char,
+                    "end": ent.end_char,
+                    "description": spacy.explain(ent.label_) if spacy.explain(ent.label_) else ent.label_
+                })
+            
+            # Group entities by type
+            entity_groups = {}
+            for entity in entities:
+                label = entity["label"]
+                if label not in entity_groups:
+                    entity_groups[label] = []
+                entity_groups[label].append(entity)
+            
+            return {
+                "entities": entities,
+                "groups": entity_groups,
+                "total_count": len(entities)
+            }
+        except Exception as e:
+            logger.warning(f"spaCy entity extlback")
+    ext)
+    
+    def _extract_entities_fallback(self, text: str) -> Dict[str, Li:
+        """Fallback entit
         entities = []
         
-        for ent in doc.ents:
-            entities.append({
-                "text": ent.text,
-                "label": ent.label_,
-                "start": ent.start_char,
-                "end": ent.end_char,
-                "description": spacy.explain(ent.label_)
-            })
+        # Basic patterns for common entities
+        patterns = {
+            "ORG": [
+                r'\b[A-Z][a-zA-Z\s&',
+         )\b'
+         ],
+            "PERSO": [
+                r'\b[A-Z][a-z]+\s+[A-',
+                r'\bMr\.?\s+[A-Z][a-z]+\b',
+                r'\bMs\.?\s+[A-Z]]+\b',
+                r'\bDr\.?\s+[A-Z][a-z]+\b'
+            ],
+            "DATE": [
+                r'\b\d{1,2}[\/\-]\d{1,2}[\/\-]\d{',
+                
+            ],
+            "MONEY": [
+                r'\$[\d,]+(?:\.\d{2})?\
+                r'\b\d+\s+dollars?\b'
+            ]
         
-        # Group entities by type
-        entity_groups = {}
+        
+    tems():
+            for pattern in pattern_list:
+                matches = re.finditer(pattern, text, re.IGNOECASE)
+                for match in matches:
+                    entiti({
+                        "text": match.group(),
+                        "label": label,
+                        "start": match.start(),
+                        "end": match.end(),
+                        "description": label
+             })
+        
+        # Group entitiee
+         {}
         for entity in entities:
             label = entity["label"]
-            if label not in entity_groups:
+            if label not in entit
                 entity_groups[label] = []
-            entity_groups[label].append(entity)
+            entity_groups[lab)
         
         return {
             "entities": entities,
             "groups": entity_groups,
-            "total_count": len(entities)
-        }
+        ntities)
+        }n(e": letal_coun    "tot(entityel].appendoups:y_grs =y_groupentits by typ       es.appendRns.i patterint attern_lisabel, p for l   }b',\b'{2,4}\d1,2},?\s+s+\d{mber)\DeceNovember|r|Octobet|September|gusly|Au|Ju|Junepril|Mayry|March|A|Februa(?:January\br'2,4}\b[a-zZ][a-z]+\bN   |Foundationnstitutety|I(?:Universi\s&,.-]*ZA--Z][a-zr'\b[A       \.?)\by|LtdCompanration||Corpo|Corp\.?\.?|LLC?:Inc,.-]*("""gex patterns using reonextractiy st[Dict]](tllbacks_faitie_extract_entn self.  retur      ing fal us: {e},ction failedra
     
     def extract_dates_and_deadlines(self, text: str) -> List[Dict]:
         """Extract important dates and deadlines from legal text"""
