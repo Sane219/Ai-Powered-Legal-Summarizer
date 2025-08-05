@@ -9,6 +9,7 @@ import os
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
+# Import modules first
 try:
     from document_processor import DocumentProcessor
     from legal_bert_summarizer import LegalBertSummarizer
@@ -23,6 +24,9 @@ except ImportError:
         st.error(f"Error importing modules: {e}")
         st.info("Please ensure all dependencies are installed correctly.")
         st.stop()
+
+# Streamlit UI Configurations
+st.set_page_config(page_title="AI Legal Document Summarizer", page_icon="⚖️", layout="wide")
 
 # Initialize components with error handling
 @st.cache_resource
@@ -41,9 +45,6 @@ processor, legal_summarizer, legal_analyzer = initialize_components()
 if not all([processor, legal_summarizer, legal_analyzer]):
     st.error("Failed to initialize application components. Please check the logs.")
     st.stop()
-
-# Streamlit UI Configurations
-st.set_page_config(page_title="AI Legal Document Summarizer", page_icon="⚖️", layout="wide")
 
 # App Title
 st.title("AI-Powered Legal Document Summarization")
