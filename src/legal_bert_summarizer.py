@@ -211,19 +211,20 @@ class LegalBertSummarizer:
         """Fallback method to score legal importance using keywords"""
         legal_keywords = [
             'agreement', 'contract', 'party', 'parties', 'shall', 'hereby', 'whereas',
-            'confidentiality', 'termination', 'liability', 'indemnif
-operty',
-           ent'
+            'confidentiality', 'termination', 'liability', 'indemnification', 'property',
+            'intellectual', 'disclosure', 'non-disclosure', 'employment', 'compensation',
+            'damages', 'breach', 'arbitration', 'jurisdiction', 'governing law',
+            'force majeure', 'amendment'
         ]
         
-    
-        matches = sum(1 for keyword inwer)
-     
-        # Normalize sd 1
-        max_possible_mat)
-    se 0.5
+        sentence_lower = sentence.lower()
+        matches = sum(1 for keyword in legal_keywords if keyword in sentence_lower)
         
-        return min(score, 1.0) elhes > 0tc_possible_mamaxif tches ssible_mahes / max_poscore = matc    nce.split())), len(senteordseyw_k(len(legalches = minween 0 anore betc    sentence_loword ineys if krdl_keywoga lece.lower()r = sentenwece_loen    sent', 'amendmrce majeure', 'fotrationn', 'arbiisdictio, 'jurw'ning la 'goverl printellectuae', 'closur-disment', 'non, 'employpensation', 'comamages'   'd         ,ch'tion', 'breaica
+        # Normalize score between 0 and 1
+        max_possible_matches = min(len(legal_keywords), len(sentence.split()))
+        score = matches / max_possible_matches if max_possible_matches > 0 else 0.5
+        
+        return min(score, 1.0)
 
 def main():
     """Test the Legal BERT unified summarizer"""
