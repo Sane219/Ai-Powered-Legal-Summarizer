@@ -1,7 +1,7 @@
 import streamlit as st
 import os
 import torch
-from transformers import LEDTokenizer, LEDForConditionalGeneration
+from transformers import BertTokenizer, BertModel, BartTokenizer, BartForConditionalGeneration
 import fitz  # PyMuPDF
 import re
 import spacy
@@ -10,6 +10,7 @@ import base64
 import io
 import pandas as pd
 import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
 
 # Set page config
 st.set_page_config(
@@ -21,22 +22,36 @@ st.set_page_config(
 
 # Custom CSS for professional UI
 def local_css(file_name):
-    with open(file_name) as f:
-        st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
+    if os.path.exists(file_name):
+        with open(file_name) as f:
+            st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
+    else:
+        st.warning("style.css not found. Using default styling.")
 
 local_css("style.css")
 
 # Initialize models with caching
 @st.cache_resource(show_spinner=False)
 def load_models():
-    # Long-document summarization model
-    summarizer_tokenizer = LEDTokenizer.from_pretrained("allenai/led-base-16384")
-    summarizer_model = LEDForConditionalGeneration.from_pretrained("allenai/led-base-16384")
-    
-    return summarizer_tokenizer, summarizer_model
+    try:
+        # Legal-BERT for sentence scoring
+        legal_tokenizer = BertTokenizer.from_pretrained("nlpaueb/legal-bert-base-uncased")
+        legal_model = BertModel.from_pretrained("nlpaueb/legal-bert-base-uncased")
+        # BART for abstractive summarization
+        summarizer_tokenizer = BartTokenizer.from_pretrained("facebook/bart-large-cnn")
+        summarizer_model = BartForConditionalGeneration.from_pretrained("facebook/bart-large-cnn")
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        legal_model.to(device)
+        summarizer_model.to(device)
+        return legal_tokenizer, legal_model, summarizer_tokenizer, summarizer_model
+    except Exception as e:
+        st.error(f"Failed to load models: {str(e)}")
+        return None, None, None, None
 
 # Load models
-summarizer_tokenizer, summarizer_model = load_models()
+legal_tokenizer, legal_model, summarizer_tokenizer, summarizer_model = load_models()
+if any(model is None for model in [legal_tokenizer, legal_model, summarizer_tokenizer, summarizer_model]):
+    st.stop()
 
 # Load spaCy model for legal text processing
 @st.cache_resource(show_spinner=False)
@@ -45,18 +60,28 @@ def load_spacy():
         return spacy.load("en_core_web_sm")
     except:
         st.warning("Downloading spaCy model... This may take a moment.")
-        spacy.cli.download("en_core_web_sm")
-        return spacy.load("en_core_web_sm")
+        try:
+            spacy.cli.download("en_core_web_sm")
+            return spacy.load("en_core_web_sm")
+        except Exception as e:
+            st.error(f"Failed to load spaCy model: {str(e)}")
+            return None
 
 nlp = load_spacy()
+if nlp is None:
+    st.stop()
 
 # Function to extract text from PDF
 def extract_text_from_pdf(file):
-    doc = fitz.open(stream=file.read(), filetype="pdf")
-    text = ""
-    for page in doc:
-        text += page.get_text()
-    return text
+    try:
+        doc = fitz.open(stream=file.read(), filetype="pdf")
+        text = ""
+        for page in doc:
+            text += page.get_text()
+        return text
+    except Exception as e:
+        st.error(f"Error extracting PDF: {str(e)}")
+        return ""
 
 # Function to anonymize sensitive information
 def anonymize_text(text):
@@ -103,26 +128,63 @@ def extract_citations(text):
     
     return citations
 
-# Function to summarize text with legal context
-def summarize_legal_text(text, max_length=1024, min_length=256):
-    text = text.replace("\n", " ")
+# Function to score sentences using Legal-BERT
+def score_sentences(text):
+    doc = nlp(text)
+    sentences = [sent.text.strip() for sent in doc.sents if len(sent.text.strip()) > 10]
+    if not sentences:
+        return [], []
     
+    # Tokenize sentences
+    inputs = legal_tokenizer(sentences, return_tensors="pt", padding=True, truncation=True, max_length=512)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+    
+    # Get sentence embeddings
+    with torch.no_grad():
+        outputs = legal_model(**inputs)
+        sentence_embeddings = outputs.last_hidden_state[:, 0, :]  # CLS token embeddings
+    
+    # Calculate importance scores (e.g., cosine similarity to mean embedding)
+    mean_embedding = sentence_embeddings.mean(dim=0).reshape(1, -1)
+    scores = cosine_similarity(sentence_embeddings.cpu().numpy(), mean_embedding.cpu().numpy()).flatten()
+    
+    return sentences, scores
+
+# Function to summarize text with legal context
+def summarize_legal_text(text, max_length=512, min_length=128, top_k=3):
+    # Clean and truncate text
+    text = text.replace("\n", " ")[:10000]
+    
+    # Extractive summarization with Legal-BERT
+    sentences, scores = score_sentences(text)
+    if not sentences:
+        return "No valid sentences found for summarization."
+    
+    # Select top-k sentences
+    top_sentences = [sentences[i] for i in np.argsort(scores)[-top_k:]]
+    extractive_summary = " ".join(top_sentences)
+    
+    # Abstractive summarization with BART
     inputs = summarizer_tokenizer(
-        text,
+        extractive_summary,
         return_tensors="pt",
-        max_length=16384,
+        max_length=1024,
         truncation=True,
         padding="max_length"
     )
     
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    inputs = {k: v.to(device) for k, v in inputs.items()}
+    
     with torch.no_grad():
         summary_ids = summarizer_model.generate(
-            inputs.input_ids,
-            attention_mask=inputs.attention_mask,
+            inputs["input_ids"],
+            attention_mask=inputs["attention_mask"],
             max_length=max_length,
             min_length=min_length,
-            length_penalty=2.0,
-            num_beams=4,
+            length_penalty=1.0,
+            num_beams=2,
             early_stopping=True
         )
     
@@ -153,20 +215,23 @@ def highlight_source_text(text, summary):
 
 # Function to generate download link
 def get_download_link(text, filename, file_type="txt"):
-    if file_type == "txt":
-        b64 = base64.b64encode(text.encode()).decode()
-        href = f'<a href="data:file/txt;base64,{b64}" download="{filename}">Download {file_type.upper()}</a>'
-    elif file_type == "pdf":
-        pdf_bytes = io.BytesIO()
-        doc = fitz.open()
-        page = doc.new_page()
-        page.insert_text((72, 72), text)
-        doc.save(pdf_bytes)
-        pdf_bytes.seek(0)
-        b64 = base64.b64encode(pdf_bytes.read()).decode()
-        href = f'<a href="data:application/pdf;base64,{b64}" download="{filename}">Download PDF</a>'
-    
-    return href
+    try:
+        if file_type == "txt":
+            b64 = base64.b64encode(text.encode()).decode()
+            href = f'<a href="data:file/txt;base64,{b64}" download="{filename}">Download {file_type.upper()}</a>'
+        elif file_type == "pdf":
+            pdf_bytes = io.BytesIO()
+            doc = fitz.open()
+            page = doc.new_page()
+            page.insert_text((72, 72), text)
+            doc.save(pdf_bytes)
+            pdf_bytes.seek(0)
+            b64 = base64.b64encode(pdf_bytes.read()).decode()
+            href = f'<a href="data:application/pdf;base64,{b64}" download="{filename}">Download PDF</a>'
+        return href
+    except Exception as e:
+        st.error(f"Error generating download link: {str(e)}")
+        return ""
 
 # Main app
 def main():
@@ -176,8 +241,9 @@ def main():
         st.markdown("---")
         
         st.subheader("Settings")
-        max_length = st.slider("Summary Length", 256, 2048, 1024, 128)
-        min_length = st.slider("Minimum Length", 64, 512, 256, 64)
+        max_length = st.slider("Summary Length", 256, 1024, 512, 128)
+        min_length = st.slider("Minimum Length", 64, 256, 128, 64)
+        top_k = st.slider("Top Sentences for Extraction", 1, 5, 3, 1)
         anonymize = st.checkbox("Anonymize Sensitive Info", value=True)
         preserve_citations = st.checkbox("Preserve Citations", value=True)
         show_explanation = st.checkbox("Show Explanation", value=True)
@@ -193,9 +259,9 @@ def main():
         
         st.markdown("---")
         st.markdown("### Model Information")
-        st.markdown("**Summarization Model:** allenai/led-base-16384")
-        st.markdown("**Legal NER Model:** Regex-based")
+        st.markdown("**Summarization Model:** facebook/bart-large-cnn")
         st.markdown("**Legal Model:** nlpaueb/legal-bert-base-uncased")
+        st.markdown("**Legal NER Model:** Regex-based")
     
     st.title("Legal Document Summarization Tool")
     st.markdown("Upload a legal document to generate a concise, accurate summary with preserved citations and legal context.")
@@ -207,62 +273,66 @@ def main():
     )
     
     if uploaded_file is not None:
-        if uploaded_file.name.endswith(".pdf"):
-            with st.spinner("Extracting text from PDF..."):
-                text = extract_text_from_pdf(uploaded_file)
-        else:
-            text = uploaded_file.read().decode("utf-8")
-        
-        if anonymize:
-            with st.spinner("Anonymizing sensitive information..."):
-                text = anonymize_text(text)
-        
-        citations = extract_citations(text)
-        
-        with st.spinner("Generating legal summary..."):
-            summary = summarize_legal_text(text, max_length, min_length)
+        try:
+            if uploaded_file.name.endswith(".pdf"):
+                with st.spinner("Extracting text from PDF..."):
+                    text = extract_text_from_pdf(uploaded_file)
+            else:
+                text = uploaded_file.read().decode("utf-8")
             
-            if preserve_citations and citations:
-                for citation in citations:
-                    if citation["text"] not in summary:
-                        summary += f" [{citation['text']}]"
-        
-        st.markdown("---")
-        st.header("Summary")
-        st.markdown(f'<div class="summary-box">{summary}</div>', unsafe_allow_html=True)
-        
-        if citations:
-            st.subheader("Detected Citations")
-            citation_df = pd.DataFrame(citations)
-            st.dataframe(citation_df.drop(columns=["start", "end"]))
-        
-        if show_explanation:
-            st.subheader("Source Text Explanation")
-            with st.expander("View highlighted source text"):
-                highlighted_text = highlight_source_text(text, summary)
-                st.markdown(highlighted_text, unsafe_allow_html=True)
-        
-        st.markdown("---")
-        st.subheader("Export Options")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown(get_download_link(summary, "legal_summary.txt", "txt"), unsafe_allow_html=True)
-        
-        with col2:
-            st.markdown(get_download_link(summary, "legal_summary.pdf", "pdf"), unsafe_allow_html=True)
-        
-        st.markdown("---")
-        st.subheader("Bias Detection")
-        st.info("Bias detection framework implemented. In production, this would analyze for demographic, jurisdictional, and interpretational biases.")
-        
-        with st.expander("Processing Details"):
-            st.write(f"Original document length: {len(text)} characters")
-            st.write(f"Summary length: {len(summary)} characters")
-            st.write(f"Compression ratio: {round(len(summary)/len(text)*100, 1)}%")
-            st.write(f"Citations detected: {len(citations)}")
-            st.write("Anonymization: " + ("Enabled" if anonymize else "Disabled"))
-            st.write("Citation preservation: " + ("Enabled" if preserve_citations else "Disabled"))
+            if len(text) > 100000:
+                st.error("Document is too large. Please upload a file with less than 100,000 characters.")
+                return
+            
+            if anonymize:
+                with st.spinner("Anonymizing sensitive information..."):
+                    text = anonymize_text(text)
+            
+            citations = extract_citations(text)
+            
+            with st.spinner("Generating legal summary..."):
+                progress_bar = st.progress(0)
+                summary = summarize_legal_text(text, max_length, min_length, top_k)
+                progress_bar.progress(100)
+                
+            st.markdown("---")
+            st.header("Summary")
+            st.markdown(f'<div class="summary-box">{summary}</div>', unsafe_allow_html=True)
+            
+            if citations:
+                st.subheader("Detected Citations")
+                citation_df = pd.DataFrame(citations)
+                st.dataframe(citation_df.drop(columns=["start", "end"]))
+            
+            if show_explanation:
+                st.subheader("Source Text Explanation")
+                with st.expander("View highlighted source text"):
+                    highlighted_text = highlight_source_text(text, summary)
+                    st.markdown(highlighted_text, unsafe_allow_html=True)
+            
+            st.markdown("---")
+            st.subheader("Export Options")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown(get_download_link(summary, "legal_summary.txt", "txt"), unsafe_allow_html=True)
+            
+            with col2:
+                st.markdown(get_download_link(summary, "legal_summary.pdf", "pdf"), unsafe_allow_html=True)
+            
+            st.markdown("---")
+            st.subheader("Bias Detection")
+            st.info("Bias detection framework implemented. In production, this would analyze for demographic, jurisdictional, and interpretational biases.")
+            
+            with st.expander("Processing Details"):
+                st.write(f"Original document length: {len(text)} characters")
+                st.write(f"Summary length: {len(summary)} characters")
+                st.write(f"Compression ratio: {round(len(summary)/len(text)*100, 1)}%")
+                st.write(f"Citations detected: {len(citations)}")
+                st.write("Anonymization: " + ("Enabled" if anonymize else "Disabled"))
+                st.write("Citation preservation: " + ("Enabled" if preserve_citations else "Disabled"))
+        except Exception as e:
+            st.error(f"An error occurred during processing: {str(e)}")
 
 if __name__ == "__main__":
     main()
