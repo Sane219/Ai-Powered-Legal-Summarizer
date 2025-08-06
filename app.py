@@ -11,9 +11,9 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
 # Import modules first
 try:
-    from document_processor import DocumentProcessor
-    from legal_bert_summarizer_optimized import LegalBertSummarizer
-    from legal_analyzer import LegalAnalyzer
+    from src.document_processor import DocumentProcessor
+    from src.legal_bert_summarizer_optimized import LegalBertSummarizer
+    from src.legal_analyzer import LegalAnalyzer
 except ImportError:
     # Try with src prefix for different deployment environments
     try:
