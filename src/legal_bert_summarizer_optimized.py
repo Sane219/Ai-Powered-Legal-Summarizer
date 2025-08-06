@@ -1,4 +1,4 @@
-uj"""
+"""
 Memory-optimized Legal BERT-based unified summarizer for both extractive and abstractive summarization
 """
 import warnings
