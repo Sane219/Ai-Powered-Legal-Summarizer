@@ -1,268 +1,262 @@
+"""
+Streamlit app for AI-Powered Legal Document Summarization
+"""
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+
 import streamlit as st
 import os
-import torch
-from transformers import LEDTokenizer, LEDForConditionalGeneration
-import fitz  # PyMuPDF
-import re
-import spacy
-from streamlit.components.v1 import html
-import base64
-import io
-import pandas as pd
-import numpy as np
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
-# Set page config
-st.set_page_config(
-    page_title="Legal Document Summarizer",
-    page_icon="⚖️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# Custom CSS for professional UI
-def local_css(file_name):
-    with open(file_name) as f:
-        st.markdown(f'<style>{f.read()}</style>', unsafe_allow_html=True)
-
-local_css("style.css")
-
-# Initialize models with caching
-@st.cache_resource(show_spinner=False)
-def load_models():
-    # Long-document summarization model
-    summarizer_tokenizer = LEDTokenizer.from_pretrained("allenai/led-base-16384")
-    summarizer_model = LEDForConditionalGeneration.from_pretrained("allenai/led-base-16384")
-    
-    return summarizer_tokenizer, summarizer_model
-
-# Load models
-summarizer_tokenizer, summarizer_model = load_models()
-
-# Load spaCy model for legal text processing
-@st.cache_resource(show_spinner=False)
-def load_spacy():
+# Import modules first
+try:
+    from document_processor import DocumentProcessor
+    from legal_bert_summarizer_optimized import LegalBertSummarizer
+    from legal_analyzer import LegalAnalyzer
+except ImportError:
+    # Try with src prefix for different deployment environments
     try:
-        return spacy.load("en_core_web_sm")
-    except:
-        st.warning("Downloading spaCy model... This may take a moment.")
-        spacy.cli.download("en_core_web_sm")
-        return spacy.load("en_core_web_sm")
+        from src.document_processor import DocumentProcessor
+        from src.legal_bert_summarizer_optimized import LegalBertSummarizer
+        from src.legal_analyzer import LegalAnalyzer
+    except ImportError as e:
+        st.error(f"Error importing modules: {e}")
+        st.info("Please ensure all dependencies are installed correctly.")
+        st.stop()
 
-nlp = load_spacy()
+# Streamlit UI Configurations
+st.set_page_config(page_title="AI Legal Document Summarizer", page_icon="⚖️", layout="wide")
 
-# Function to extract text from PDF
-def extract_text_from_pdf(file):
-    doc = fitz.open(stream=file.read(), filetype="pdf")
-    text = ""
-    for page in doc:
-        text += page.get_text()
-    return text
-
-# Function to anonymize sensitive information
-def anonymize_text(text):
-    patterns = {
-        "PERSON": r"\b[A-Z][a-z]+ [A-Z][a-z]+\b",
-        "ORGANIZATION": r"\b(?:Inc|Corp|LLC|Ltd|GmbH|AG)\b",
-        "DATE": r"\b\d{1,2}[/-]\d{1,2}[/-]\d{4}\b",
-        "EMAIL": r"\b[\w\.-]+@[\w\.-]+\.\w+\b",
-        "PHONE": r"\b\d{3}[-.\s]?\d{3}[-.\s]?\d{4}\b"
-    }
-    
-    for entity_type, pattern in patterns.items():
-        text = re.sub(pattern, f"[{entity_type}]", text)
-    
-    return text
-
-# Function to extract legal citations
-def extract_citations(text):
-    citation_patterns = [
-        r'\b\d+\s+U\.S\.\s+\d+\b',
-        r'\b\d+\s+F\.\s*\d+\b',
-        r'\b\d+\s+F\.\s*(?:Supp\.)?\s*\d+\b',
-        r'\b\d+\s+S\.?\.?C\.?t\.?\s+\d+\b',
-        r'\b\d+\s+So\.\s*\d+\b',
-        r'\b\d+\s+N\.?E\.?2?d?\s+\d+\b',
-        r'\b\d+\s+N\.?W\.?2?d?\s+\d+\b',
-        r'\b\d+\s+A\.?\.?2?d?\s+\d+\b',
-        r'\b\d+\s+P\.?\.?2?d?\s+\d+\b',
-        r'\b\d+\s+S\.?E\.?2?d?\s+\d+\b',
-        r'\b\d+\s+S\.?W\.?2?d?\s+\d+\b',
-        r'\b\d+\s+Cal\.\s+\d+\b',
-        r'\b\d+\s+N\.?Y\.?S\.?\.?2?d?\s+\d+\b'
-    ]
-    
-    citations = []
-    for pattern in citation_patterns:
-        matches = re.finditer(pattern, text)
-        for match in matches:
-            citations.append({
-                "text": match.group(),
-                "start": match.start(),
-                "end": match.end()
-            })
-    
-    return citations
-
-# Function to summarize text with legal context
-def summarize_legal_text(text, max_length=1024, min_length=256):
-    text = text.replace("\n", " ")
-    
-    inputs = summarizer_tokenizer(
-        text,
-        return_tensors="pt",
-        max_length=16384,
-        truncation=True,
-        padding="max_length"
-    )
-    
-    with torch.no_grad():
-        summary_ids = summarizer_model.generate(
-            inputs.input_ids,
-            attention_mask=inputs.attention_mask,
-            max_length=max_length,
-            min_length=min_length,
-            length_penalty=2.0,
-            num_beams=4,
-            early_stopping=True
-        )
-    
-    summary = summarizer_tokenizer.decode(summary_ids[0], skip_special_tokens=True)
-    summary = re.sub(r'\s+', ' ', summary).strip()
-    
-    return summary
-
-# Function to highlight source text
-def highlight_source_text(text, summary):
-    doc = nlp(text)
-    summary_sentences = [sent.text.strip() for sent in nlp(summary).sents]
-    
-    highlighted_text = []
-    for sent in doc.sents:
-        sent_text = sent.text.strip()
-        is_highlighted = any(
-            sent_text.lower() in s.lower() or s.lower() in sent_text.lower()
-            for s in summary_sentences
-        )
+# Initialize components with error handling and memory management
+@st.cache_resource
+def initialize_components():
+    try:
+        # Initialize with memory-efficient settings
+        processor = DocumentProcessor()
         
-        if is_highlighted:
-            highlighted_text.append(f'<mark class="highlight">{sent_text}</mark>')
+        # Add memory management for models
+        import gc
+        import torch
+        
+        # Clear any existing models from memory
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
+        
+        legal_summarizer = LegalBertSummarizer()
+        legal_analyzer = LegalAnalyzer()
+        
+        return processor, legal_summarizer, legal_analyzer
+    except Exception as e:
+        st.error(f"Error initializing components: {e}")
+        st.info("This might be due to insufficient memory. Try refreshing the page or using smaller documents.")
+        return None, None, None
+
+processor, legal_summarizer, legal_analyzer = initialize_components()
+
+if not all([processor, legal_summarizer, legal_analyzer]):
+    st.error("Failed to initialize application components. Please check the logs.")
+    st.info("Try refreshing the page. If the problem persists, the server may be experiencing high load.")
+    
+    # Add a retry button
+    if st.button("🔄 Retry Initialization"):
+        st.cache_resource.clear()
+        st.rerun()
+    st.stop()
+
+# Initialize session state
+if 'document_processed' not in st.session_state:
+    st.session_state.document_processed = False
+if 'document_info' not in st.session_state:
+    st.session_state.document_info = None
+
+# App Title
+st.title("AI-Powered Legal Document Summarization")
+
+# Add memory monitoring in sidebar (optional)
+with st.sidebar:
+    st.header("System Status")
+    try:
+        import psutil
+        memory_usage = psutil.virtual_memory().percent
+        if memory_usage > 85:
+            st.warning(f"⚠️ High memory usage: {memory_usage:.1f}%")
         else:
-            highlighted_text.append(sent_text)
+            st.success(f"✅ Memory usage: {memory_usage:.1f}%")
+    except ImportError:
+        st.info("Memory monitoring not available")
     
-    return " ".join(highlighted_text)
+    if st.button("🧹 Clear Cache"):
+        st.cache_resource.clear()
+        st.cache_data.clear()
+        st.success("Cache cleared!")
 
-# Function to generate download link
-def get_download_link(text, filename, file_type="txt"):
-    if file_type == "txt":
-        b64 = base64.b64encode(text.encode()).decode()
-        href = f'<a href="data:file/txt;base64,{b64}" download="{filename}">Download {file_type.upper()}</a>'
-    elif file_type == "pdf":
-        pdf_bytes = io.BytesIO()
-        doc = fitz.open()
-        page = doc.new_page()
-        page.insert_text((72, 72), text)
-        doc.save(pdf_bytes)
-        pdf_bytes.seek(0)
-        b64 = base64.b64encode(pdf_bytes.read()).decode()
-        href = f'<a href="data:application/pdf;base64,{b64}" download="{filename}">Download PDF</a>'
-    
-    return href
+# Upload documents
+uploaded_file = st.file_uploader("Upload a legal document", type=["pdf", "docx", "txt"])
 
-# Main app
-def main():
-    with st.sidebar:
-        st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/e/e4/Seal_of_the_United_States_Department_of_Justice.svg/1200px-Seal_of_the_United_States_Department_of_Justice.svg.png", width=100)
-        st.title("Legal Document Summarizer")
-        st.markdown("---")
-        
-        st.subheader("Settings")
-        max_length = st.slider("Summary Length", 256, 2048, 1024, 128)
-        min_length = st.slider("Minimum Length", 64, 512, 256, 64)
-        anonymize = st.checkbox("Anonymize Sensitive Info", value=True)
-        preserve_citations = st.checkbox("Preserve Citations", value=True)
-        show_explanation = st.checkbox("Show Explanation", value=True)
-        
-        st.markdown("---")
-        st.markdown("### Features")
-        st.markdown("- Legal-specific summarization")
-        st.markdown("- Citation preservation")
-        st.markdown("- Document anonymization")
-        st.markdown("- Source text highlighting")
-        st.markdown("- Bias detection framework")
-        st.markdown("- Privacy-focused processing")
-        
-        st.markdown("---")
-        st.markdown("### Model Information")
-        st.markdown("**Summarization Model:** allenai/led-base-16384")
-        st.markdown("**Legal NER Model:** Regex-based")
-        st.markdown("**Legal Model:** nlpaueb/legal-bert-base-uncased")
+if uploaded_file is not None:
+    # Check file size to prevent memory issues
+    file_size = len(uploaded_file.getbuffer())
+    max_size = 10 * 1024 * 1024  # 10MB limit
     
-    st.title("Legal Document Summarization Tool")
-    st.markdown("Upload a legal document to generate a concise, accurate summary with preserved citations and legal context.")
+    if file_size > max_size:
+        st.error(f"File too large ({file_size / 1024 / 1024:.1f}MB). Please upload files smaller than 10MB.")
+        st.stop()
     
-    uploaded_file = st.file_uploader(
-        "Upload Legal Document (PDF, TXT)",
-        type=["pdf", "txt"],
-        help="Supported formats: PDF, TXT. Max size: 10MB"
-    )
-    
-    if uploaded_file is not None:
-        if uploaded_file.name.endswith(".pdf"):
-            with st.spinner("Extracting text from PDF..."):
-                text = extract_text_from_pdf(uploaded_file)
-        else:
-            text = uploaded_file.read().decode("utf-8")
+    # Process file with error handling
+    try:
+        # Ensure data directory exists
+        os.makedirs("data", exist_ok=True)
         
-        if anonymize:
-            with st.spinner("Anonymizing sensitive information..."):
-                text = anonymize_text(text)
+        file_path = os.path.join("data", uploaded_file.name)
+        with open(file_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
         
-        citations = extract_citations(text)
+        # Extract and display text
+        st.header("Document Text")
+        document_info = processor.process_document(file_path)
         
-        with st.spinner("Generating legal summary..."):
-            summary = summarize_legal_text(text, max_length, min_length)
+        # Clean up file after processing to save space
+        try:
+            os.remove(file_path)
+        except:
+            pass  # Ignore cleanup errors
             
-            if preserve_citations and citations:
-                for citation in citations:
-                    if citation["text"] not in summary:
-                        summary += f" [{citation['text']}]"
-        
-        st.markdown("---")
-        st.header("Summary")
-        st.markdown(f'<div class="summary-box">{summary}</div>', unsafe_allow_html=True)
-        
-        if citations:
-            st.subheader("Detected Citations")
-            citation_df = pd.DataFrame(citations)
-            st.dataframe(citation_df.drop(columns=["start", "end"]))
-        
-        if show_explanation:
-            st.subheader("Source Text Explanation")
-            with st.expander("View highlighted source text"):
-                highlighted_text = highlight_source_text(text, summary)
-                st.markdown(highlighted_text, unsafe_allow_html=True)
-        
-        st.markdown("---")
-        st.subheader("Export Options")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown(get_download_link(summary, "legal_summary.txt", "txt"), unsafe_allow_html=True)
-        
-        with col2:
-            st.markdown(get_download_link(summary, "legal_summary.pdf", "pdf"), unsafe_allow_html=True)
-        
-        st.markdown("---")
-        st.subheader("Bias Detection")
-        st.info("Bias detection framework implemented. In production, this would analyze for demographic, jurisdictional, and interpretational biases.")
-        
-        with st.expander("Processing Details"):
-            st.write(f"Original document length: {len(text)} characters")
-            st.write(f"Summary length: {len(summary)} characters")
-            st.write(f"Compression ratio: {round(len(summary)/len(text)*100, 1)}%")
-            st.write(f"Citations detected: {len(citations)}")
-            st.write("Anonymization: " + ("Enabled" if anonymize else "Disabled"))
-            st.write("Citation preservation: " + ("Enabled" if preserve_citations else "Disabled"))
+    except Exception as e:
+        st.error(f"Error processing file: {e}")
+        st.stop()
 
-if __name__ == "__main__":
-    main()
+    if "error" in document_info:
+        st.error(f"Error in processing document: {document_info['error']}")
+    else:
+        st.text_area("Extracted Text", document_info["clean_text"], height=200)
+
+        # Create tabs for different features
+        tab1, tab2, tab3, tab4 = st.tabs(["📝 Summarization", "⚖️ Legal Analysis", "🔍 Insights", "📊 Statistics"])
+        
+        with tab1:
+            st.header("Legal BERT Summarization")
+            
+            # Summarization options
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                summarization_type = st.selectbox("Summarization Type", ["Extractive", "Abstractive"])
+            
+            with col2:
+                if summarization_type == "Extractive":
+                    num_sentences = st.slider("Number of sentences", 1, 10, 3)
+                else:
+                    max_length = st.slider("Max length", 50, 300, 150)
+            
+            if st.button("Generate Summary"):
+                with st.spinner("Generating Legal BERT summary..."):
+                    try:
+                        # Add text length check
+                        text_length = len(document_info["clean_text"])
+                        if text_length > 50000:  # ~50k characters limit
+                            st.warning("Document is very large. Using first 50,000 characters for summarization.")
+                            text_to_summarize = document_info["clean_text"][:50000]
+                        else:
+                            text_to_summarize = document_info["clean_text"]
+                        
+                        if summarization_type == "Extractive":
+                            summary = legal_summarizer.extractive_summarize(
+                                text_to_summarize, 
+                                num_sentences=num_sentences
+                            )
+                            if summary:
+                                st.success("✅ Legal BERT Extractive Summary")
+                                st.write(summary)
+                            else:
+                                st.warning("Could not generate extractive summary. Please try with different settings.")
+                        else:
+                            summary = legal_summarizer.abstractive_summarize(
+                                text_to_summarize, 
+                                max_length=max_length
+                            )
+                            if summary:
+                                st.success("✅ Legal BERT-Enhanced Abstractive Summary")
+                                st.write(summary)
+                            else:
+                                st.warning("Could not generate abstractive summary. Please try with different settings.")
+                                
+                        # Clear memory after processing
+                        import gc
+                        gc.collect()
+                        
+                    except Exception as e:
+                        st.error(f"Error generating summary: {str(e)}")
+                        st.info("This might be due to memory issues or model loading problems. Try with a smaller document or refresh the page.")
+        
+        with tab2:
+            st.header("Legal Document Analysis")
+            
+            if st.button("Analyze Document"):
+                with st.spinner("Analyzing legal document..."):
+                    analysis = legal_analyzer.comprehensive_analysis(document_info["clean_text"])
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.subheader("🌍 Jurisdiction Detection")
+                        jurisdiction = analysis["jurisdiction"]
+                        for country, score in jurisdiction.items():
+                            if score > 0:
+                                st.write(f"{country}: {score:.2%}")
+                    
+                    with col2:
+                        st.subheader("⚠️ Risk Assessment")
+                        risk_dist = analysis["risk_report"]["risk_distribution"]
+                        st.write(f"🔴 High Risk: {risk_dist['high']} clauses")
+                        st.write(f"🟡 Medium Risk: {risk_dist['medium']} clauses")
+                        st.write(f"🟢 Low Risk: {risk_dist['low']} clauses")
+                    
+                    if analysis["risk_report"]["recommendations"]:
+                        st.subheader("💡 Recommendations")
+                        for rec in analysis["risk_report"]["recommendations"]:
+                            st.write(f"• {rec}")
+        
+        with tab3:
+            st.header("Legal BERT Insights")
+            
+            if st.button("Extract Legal Insights"):
+                with st.spinner("Extracting insights with Legal BERT..."):
+                    insights = legal_summarizer.get_legal_insights(document_info["clean_text"])
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.subheader("📈 Importance Levels")
+                        st.write(f"High: {len(insights['high_importance'])} clauses")
+                        st.write(f"Medium: {len(insights['medium_importance'])} clauses")
+                        st.write(f"Low: {len(insights['low_importance'])} clauses")
+                    
+                    with col2:
+                        st.subheader("📋 Clause Types Detected")
+                        for clause_type, clauses in insights["clause_types"].items():
+                            st.write(f"• {clause_type}: {len(clauses)} instances")
+                    
+                    if insights["high_importance"]:
+                        st.subheader("🔥 High Importance Clauses")
+                        for i, clause in enumerate(insights["high_importance"][:3], 1):
+                            st.write(f"{i}. {clause[:200]}...")
+        
+        with tab4:
+            st.header("📊 Document Statistics")
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric("Word Count", document_info["word_count"])
+                st.metric("Character Count", document_info["char_count"])
+            
+            with col2:
+                st.metric("Entities Found", document_info["entities"].get("total_count", 0))
+                st.metric("Parties Identified", len(document_info["parties"]))
+            
+            with col3:
+                st.metric("Dates Found", len(document_info["dates_and_deadlines"]))
+                legal_sections = sum(1 for v in document_info["legal_sections"].values() if v)
+                st.metric("Legal Sections", legal_sections)

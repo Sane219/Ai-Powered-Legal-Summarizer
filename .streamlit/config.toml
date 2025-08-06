@@ -1,0 +1,30 @@
+[server]
+# Increase max upload size to 200MB
+maxUploadSize = 200
+
+# Enable CORS for better deployment
+enableCORS = false
+enableXsrfProtection = false
+
+# Set port for deployment
+port = 8501
+
+[browser]
+# Don't automatically open browser
+gatherUsageStats = false
+
+[theme]
+# Optional: Set a theme
+primaryColor = "#1f77b4"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f0f2f6"
+textColor = "#262730"
+
+[runner]
+# Prevent memory issues
+magicEnabled = true
+installTracer = false
+fixMatplotlib = true
+
+# Set memory limits
+maxCachedEntries = 10

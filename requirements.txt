@@ -34,3 +34,6 @@ python-multipart==0.0.6
 
 # Logging and configuration
 python-dotenv==1.0.0
+
+# System monitoring
+psutil==5.9.6
